@@ -1,5 +1,5 @@
 \c postgres
-DROP DATABASE test;
-CREATE DATABASE test;
-\c test
+DROP DATABASE :db;
+CREATE DATABASE :db;
+\c :db
 \i schema.sql
