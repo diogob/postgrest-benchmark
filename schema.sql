@@ -1,5 +1,3 @@
-/*
-*/
 CREATE ROLE postgrest;
 CREATE ROLE anonymous;
 CREATE ROLE admin;
