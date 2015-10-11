@@ -1,3 +1,4 @@
+CREATE EXTENSION pgcrypto;
 CREATE ROLE postgrest;
 CREATE ROLE anonymous;
 CREATE ROLE admin;
@@ -14,6 +15,7 @@ CREATE TABLE public.users (
        id serial primary key,
        name text not null,
        pass text,
+       role text not null default 'employee',
        company_id integer not null references companies
 );
 
@@ -21,6 +23,39 @@ CREATE POLICY same_user ON public.users
 USING ( id = current_user::int );
 
 ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
+
+CREATE FUNCTION public.encrypt_pass()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    new.pass = public.crypt(new.pass, public.gen_salt('bf'));
+    RETURN new;
+END;
+$$;
+
+CREATE TRIGGER encrypt_pass
+BEFORE INSERT OR UPDATE ON public.users
+FOR EACH ROW
+EXECUTE PROCEDURE public.encrypt_pass();
+
+CREATE FUNCTION public.create_db_user()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    EXECUTE 'CREATE ROLE ' || quote_ident(new.id::text) || ' IN ROLE ' || quote_ident(new.role);
+    RETURN new;
+EXCEPTION
+  WHEN others THEN
+       RETURN new;
+END;
+$$;
+
+CREATE TRIGGER create_db_user
+BEFORE INSERT ON public.users
+FOR EACH ROW
+EXECUTE PROCEDURE public.create_db_user();
 
 CREATE FUNCTION public.assign_company_id()
 RETURNS trigger
@@ -96,8 +131,8 @@ AS $$
 DECLARE
   vcompany_id int;
 BEGIN
-  INSERT INTO companies (name) VALUES (new.company_name) RETURNING company_id INTO vcompany_id;
-  INSERT INTO users (name, company_id) VALUES (new.user_name, vcompany_id);
+  INSERT INTO companies (name) VALUES (new.company_name) RETURNING id INTO vcompany_id;
+  INSERT INTO users (name, role, company_id) VALUES (new.user_name, 'admin', vcompany_id);
 RETURN new;
 END;
 $$;
@@ -151,6 +186,6 @@ GRANT SELECT ON "1".projects TO employee;
 
 GRANT USAGE ON SEQUENCE companies_id_seq, projects_id_seq, users_id_seq TO public;
 
-INSERT INTO companies (name) SELECT 'Company ' || seq FROM generate_series(1, :n_companies) seq;
+INSERT INTO signup (company_name, user_name) SELECT 'Company ' || seq, 'Company ' || seq || ' Admin' FROM generate_series(1, :n_companies) seq;
 INSERT INTO projects (name) SELECT 'Project ' || seq FROM generate_series(1, :n_projects) seq, companies;
 INSERT INTO projects (name , company_id) VALUES ('bootstrap', 1);
