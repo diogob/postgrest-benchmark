@@ -12,3 +12,11 @@ with 100 companies and 10 projects in each run:
 ```
 psql -v n_companies=100 -v n_projects=10 -v db=test < setup.sql
 ```
+
+## Benchmarking
+
+To test with 10 concurrent clients for 60 seconds using admin and employee sample transactions:
+
+```
+pgbench -f admin_transaction.sql -f employee_transaction.sql -c 10 -T 60 test
+```
