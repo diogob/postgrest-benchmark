@@ -19,6 +19,8 @@ CREATE TABLE public.users (
        company_id integer not null references companies
 );
 
+GRANT SELECT ON public.users TO public;
+
 CREATE POLICY same_user ON public.users
 USING ( id = current_user::int );
 
@@ -75,12 +77,20 @@ BEFORE INSERT OR UPDATE ON public.users
 FOR EACH ROW
 EXECUTE PROCEDURE public.assign_company_id();
 
+CREATE OR REPLACE FUNCTION user_id()
+RETURNS integer
+STABLE
+LANGUAGE SQL
+AS $$
+SELECT current_user::int;
+$$;
+
 CREATE OR REPLACE FUNCTION company_id()
 RETURNS integer
 STABLE
 LANGUAGE SQL
 AS $$
-    SELECT company_id FROM users u WHERE u.id = current_user::int;
+    SELECT company_id FROM public.users u WHERE u.id = user_id();
 $$;
 
 -- project (id, name, company_id)
@@ -99,14 +109,22 @@ BEFORE INSERT OR UPDATE ON public.projects
 FOR EACH ROW
 EXECUTE PROCEDURE public.assign_company_id();
 
-ALTER TABLE projects ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.projects ENABLE ROW LEVEL SECURITY;
+GRANT SELECT ON public.projects TO admin;
 
 -- users_projects(project_id, user_id)
-CREATE TABLE users_projects (
+CREATE TABLE public.users_projects (
        project_id integer references projects,
        user_id integer references users,
        primary key(project_id, user_id)
 );
+
+CREATE POLICY same_company ON public.users_projects
+WITH CHECK ( EXISTS (SELECT true FROM public.projects p WHERE p.id = project_id AND p.company_id = company_id()) );
+
+ALTER TABLE public.users_projects ENABLE ROW LEVEL SECURITY;
+
+GRANT INSERT ON public.users_projects TO admin;
 
 /*
 */
@@ -144,16 +162,19 @@ EXECUTE PROCEDURE public.signup();
 
 GRANT INSERT ON signup TO anonymous;
 
-CREATE VIEW "1".users AS
+CREATE OR REPLACE VIEW "1".users AS
     SELECT
         u.id,
         u.name,
         u.pass
     FROM
-        public.users u;
+        public.users u
+    WHERE
+        u.company_id = company_id();
 
 -- employees can not insert users in the system
 GRANT SELECT, INSERT, UPDATE ON "1".users TO admin;
+GRANT SELECT ON "1".users TO employee;
 
 CREATE VIEW "1".users_projects AS
     SELECT
@@ -163,6 +184,27 @@ CREATE VIEW "1".users_projects AS
         public.users_projects
     WHERE
         EXISTS (SELECT true FROM public.projects p WHERE p.id = project_id AND company_id = company_id());
+
+CREATE OR REPLACE FUNCTION public.insert_users_projects()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    -- This function is enough to use the table policy during insertion
+    INSERT INTO public.users_projects (user_id, project_id) VALUES (new.user_id, new.project_id);
+RETURN new;
+END;
+$$;
+
+-- Without this trigger the view insert does not use RLS policy from table
+CREATE TRIGGER insert_users_projects
+INSTEAD OF INSERT ON "1".users_projects
+FOR EACH ROW
+EXECUTE PROCEDURE public.insert_users_projects();
+
+
+-- employees can not insert users in the system
+GRANT SELECT, INSERT, UPDATE ON "1".users_projects TO admin;
 
 CREATE VIEW "1".projects AS
         SELECT
@@ -187,5 +229,5 @@ GRANT SELECT ON "1".projects TO employee;
 GRANT USAGE ON SEQUENCE companies_id_seq, projects_id_seq, users_id_seq TO public;
 
 INSERT INTO signup (company_name, user_name) SELECT 'Company ' || seq, 'Company ' || seq || ' Admin' FROM generate_series(1, :n_companies) seq;
-INSERT INTO projects (name) SELECT 'Project ' || seq FROM generate_series(1, :n_projects) seq, companies;
-INSERT INTO projects (name , company_id) VALUES ('bootstrap', 1);
+INSERT INTO projects (name, company_id) SELECT 'Project ' || seq, companies.id FROM generate_series(1, :n_projects) seq, companies;
+INSERT INTO users (name, company_id) SELECT 'User ' || seq, companies.id FROM generate_series(1, :n_users) seq, companies;
