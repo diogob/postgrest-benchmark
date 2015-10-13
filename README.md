@@ -25,6 +25,10 @@ for the one role per user model:
 pgbench -f one_role_per_user/admin_transaction.sql -f one_role_per_user/employee_transaction.sql -c 10 -T 60 test
 ```
 
+## Transaction scripts and bottlenecks
+
+TODO
+
 ## Results
 
 ### 1 role per user
