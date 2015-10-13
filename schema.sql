@@ -1,28 +1,8 @@
-CREATE EXTENSION pgcrypto;
-CREATE ROLE postgrest;
-CREATE ROLE anonymous;
-CREATE ROLE admin;
-CREATE ROLE employee;
-
--- companies (id, name)
-CREATE TABLE companies (
-       id serial primary key,
-       name text unique
-);
-
--- users (id, email, type, company_id, password) --type can be admin/employee
-CREATE TABLE public.users (
-       id serial primary key,
-       name text not null,
-       pass text,
-       role text not null default 'employee',
-       company_id integer not null references companies
-);
 
 GRANT SELECT ON public.users TO public;
 
 CREATE POLICY same_user ON public.users
-USING ( id = current_user::int );
+USING ( id = user_id() );
 
 ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
 
@@ -41,57 +21,11 @@ BEFORE INSERT OR UPDATE ON public.users
 FOR EACH ROW
 EXECUTE PROCEDURE public.encrypt_pass();
 
-CREATE FUNCTION public.create_db_user()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $$
-BEGIN
-    EXECUTE 'CREATE ROLE ' || quote_ident(new.id::text) || ' IN ROLE ' || quote_ident(new.role);
-    RETURN new;
-EXCEPTION
-  WHEN others THEN
-       RETURN new;
-END;
-$$;
-
-CREATE TRIGGER create_db_user
-BEFORE INSERT ON public.users
-FOR EACH ROW
-EXECUTE PROCEDURE public.create_db_user();
-
-CREATE FUNCTION public.assign_company_id()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $$
-    BEGIN
-        IF current_user::text ~ '^\d+$' THEN
-            new.company_id := company_id();
-        END IF;
-        RETURN new;
-    END;
-$$;
-
 -- an admin can add users to the system but only with the right company_id
 CREATE TRIGGER assign_company_id
 BEFORE INSERT OR UPDATE ON public.users
 FOR EACH ROW
 EXECUTE PROCEDURE public.assign_company_id();
-
-CREATE OR REPLACE FUNCTION user_id()
-RETURNS integer
-STABLE
-LANGUAGE SQL
-AS $$
-SELECT current_user::int;
-$$;
-
-CREATE OR REPLACE FUNCTION company_id()
-RETURNS integer
-STABLE
-LANGUAGE SQL
-AS $$
-    SELECT company_id FROM public.users u WHERE u.id = user_id();
-$$;
 
 -- project (id, name, company_id)
 CREATE TABLE public.projects (
@@ -206,28 +140,3 @@ EXECUTE PROCEDURE public.insert_users_projects();
 -- employees can not insert users in the system
 GRANT SELECT, INSERT, UPDATE ON "1".users_projects TO admin;
 
-CREATE VIEW "1".projects AS
-        SELECT
-        p.id,
-        p.name
-        FROM
-        public.projects p
-        WHERE
-        p.company_id = company_id() AND
-        (
-            -- each user when logged in can see only the projects within his company if he is an admin
-            pg_has_role(current_user, 'admin', 'usage') OR
-
-            -- if the user is an employee he needs to see only the projects in his company that he is assigned to
-            EXISTS(SELECT true FROM "1".users_projects up WHERE up.project_id = p.id)
-        );
-
--- and admin can edit a project, a user can not
-GRANT SELECT, INSERT, UPDATE ON "1".projects TO admin;
-GRANT SELECT ON "1".projects TO employee;
-
-GRANT USAGE ON SEQUENCE companies_id_seq, projects_id_seq, users_id_seq TO public;
-
-INSERT INTO signup (company_name, user_name) SELECT 'Company ' || seq, 'Company ' || seq || ' Admin' FROM generate_series(1, :n_companies) seq;
-INSERT INTO projects (name, company_id) SELECT 'Project ' || seq, companies.id FROM generate_series(1, :n_projects) seq, companies;
-INSERT INTO users (name, company_id) SELECT 'User ' || seq, companies.id FROM generate_series(1, :n_users) seq, companies;
